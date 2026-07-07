@@ -139,14 +139,16 @@ Provozierte Fehler und ihre sichtbare Behandlung:
 | --- | --- | --- |
 | 401 | **echt** | Token wird absichtlich korrumpiert → Invalidate, Single-Flight-Refresh, Backoff, Retry |
 | 404 | **echt** | Doppel-Move derselben Mail (Claim-Race) — bewusst ohne `Prefer: IdType='ImmutableId'`, um die Mutable-ID-Falle zu zeigen |
-| 429 / 503 | **simuliert** | Chaos-Injektion (`-ChaosRate`, Default 30 %) fälscht Drossel-Antworten — AIMD-Halbierung, Retry-After-Parken und App-Hopping werden sichtbar, ohne Graph real zu fluten |
+| 429 / 503 | **echt** | Concurrency-Burst: `-BurstSize` (Default 10) parallele Requests **ohne** lokalen Limiter verletzen das 4er-Limit pro App+Postfach — Graph drosselt echt (meist 429 `MailboxConcurrency`, je nach Backend/Operation 503) |
+| 429 / 503 | **simuliert** | Chaos-Injektion (`-ChaosRate`, Default 30 %) liefert den anhaltenden Drossel-Strom für die Mover-Phase — AIMD-Halbierung, Retry-After-Parken, App-Hopping — ohne das Limit dauerhaft zu verletzen |
 
 Ausgabe-Konvention: **Gelb** = was passiert ist, **Cyan** = `Resolving with: …`
 (die Gegenmaßnahme), Grün = Erfolg, Rot = permanent, Magenta = Phasen.
 Statusbars: WPF-Dashboard (InFlight-Threads, AIMD-Limit, Token-Restlaufzeit
 pro App, Counter, Live-Log) in einem eigenen STA-Runspace; parallel dazu
 `Write-Progress`-Balken in der Konsole. `-NoGui` für Server Core,
-`-SkipSeed` nutzt vorhandene Mails, `-Cleanup` räumt die Demo-Mails ab.
+`-SkipSeed` nutzt vorhandene Mails, `-Cleanup` räumt die Demo-Mails ab,
+`-BurstSize`/`-NoBurst` steuern den echten Concurrency-Burst.
 
 ```powershell
 .\Demo-GraphThrottling.ps1                     # WPF + Konsole, 12 Mails, Chaos 30 %
