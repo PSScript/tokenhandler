@@ -1,4 +1,4 @@
-# tokenhandler — Graph-Throttling-Scaffold für den Mail-Handler
+# tokenhandler — Graph-Throttling-Scaffold für den Orchestra-Mail-Handler
 
 Referenz-Gerüst (Java + Python, klassengleich) für die Ablösung des naiven
 Polling-/Retry-Verhaltens im Orchestra-E-Mail-Handler gegen Microsoft Graph.
@@ -51,15 +51,18 @@ Backoff: `uniform(0, min(60 s, 1 s · 2^Versuch))` (Full Jitter),
 
 ## Variante A — isRead-Claim (`CLAIM_MODE=isread`, Default)
 
-`$filter=isRead eq false`, In-Memory-Claim-Set gegen Poll-Überlappung
+`$filter=receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq false` mit
+`$orderby=receivedDateTime asc` (FIFO; zur `$filter`+`$orderby`-Eigenheit
+siehe Encoding-Konventionen), In-Memory-Claim-Set gegen Poll-Überlappung
 (Polling alle *n* Sekunden, `isRead` kippt erst nach der Verarbeitung),
 nach Verarbeitung `PATCH isRead=true`.
 
 ## Variante B — QoS-Polling-Lane + Mover (`CLAIM_MODE=move`)
 
 * Der Poller holt Top-25 aus dem Posteingang (**ohne Filter** — der
-  Posteingang selbst ist die Warteschlange) und verschiebt jede Mail sofort
-  nach `PROCESSING_FOLDER` (Default `Processing`, wird bei Bedarf angelegt).
+  Posteingang selbst ist die Warteschlange, `$orderby=receivedDateTime asc`
+  macht daraus eine FIFO-Queue) und verschiebt jede Mail sofort nach
+  `PROCESSING_FOLDER` (Default `Processing`, wird bei Bedarf angelegt).
 * **Der Move ist der Claim**: atomar pro Mail. Verliert eine zweite Instanz
   das Race, antwortet Graph mit 404 (`ErrorItemNotFound`) — die Mail wird
   übersprungen. Damit ist Variante B ohne weiteres mehrinstanzfähig und
@@ -97,6 +100,12 @@ nach Verarbeitung `PATCH isRead=true`.
   über das `params=`-Dict selbst.
 * Wellknown-Folder kleingeschrieben (`inbox`, `sentitems`, …) — wie die
   Ordnernamen-Normalisierung im Referenz-Skript.
+* **`$orderby=receivedDateTime asc`** auf allen Poll-Queries — FIFO, älteste
+  zuerst; ohne explizites `$orderby` ist die Reihenfolge nicht garantiert.
+  Graph-Eigenheit bei `$filter` **+** `$orderby`: die `$orderby`-Properties
+  müssen im `$filter` enthalten sein und dort **vor** den übrigen Bedingungen
+  stehen — sonst HTTP 400 (`InefficientFilter`). Variante A löst das mit
+  `receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq false`.
 * `Prefer: IdType='ImmutableId'` in Single-Quote-Schreibweise wie im
   Referenz-Skript, hier zentral in `GraphApp.singleAttempt()` gesetzt.
 * Token-Handling wie `Get-GraphToken`: Cache mit 5-Minuten-Skew,
@@ -104,6 +113,46 @@ nach Verarbeitung `PATCH isRead=true`.
   Single-Flight-Lock und Backoff gegen AAD-Drosselung.
 * 429-Handling wie im Referenz-Skript (`Retry-After` respektieren), hier
   erweitert um 401-Refresh-Pfad, 503-AIMD und Full-Jitter-Backoff.
+
+## Ownership-Modell (Rust-Analogie)
+
+Das In-Memory-Claim-Set ist eine Ownership-Tabelle im Rust-Sinn: pro Mail-ID
+existiert genau **ein** Owner. Der Poller nimmt Ownership per *move* (Claim),
+transferiert sie beim Submit an einen Worker, und der Worker gibt sie im
+`finally` wieder frei (*drop*) — ein Double-Claim scheitert wie ein zweiter
+`&mut`-Borrow. Für Observability lässt sich das Set zu einer Hashtable
+`{id → owner, since, state}` erweitern; genau so macht es
+`Demo-GraphThrottling.ps1`. In Variante B übernimmt Graph selbst die Rolle
+des Borrow-Checkers: ein verlorenes Move-Race wird nicht zum Compilerfehler,
+sondern zu HTTP 404.
+
+## Demo: `Demo-GraphThrottling.ps1` (PowerShell + WPF)
+
+Interaktive Demo gegen einen **Testtenant** — alle Variablen (Tenant, Apps,
+Postfach, Ordner) stehen oben im Skript. Der Mover verschiebt Mails von
+`$SourceFolderName` (`Eingehend`) nach `$TargetFolderName` (`Verarbeitet`),
+FIFO per `$orderby`, mit Runspace-Workern und der Ownership-Hashtable.
+
+Provozierte Fehler und ihre sichtbare Behandlung:
+
+| Fehler | Art | Demonstration |
+| --- | --- | --- |
+| 401 | **echt** | Token wird absichtlich korrumpiert → Invalidate, Single-Flight-Refresh, Backoff, Retry |
+| 404 | **echt** | Doppel-Move derselben Mail (Claim-Race) — bewusst ohne `Prefer: IdType='ImmutableId'`, um die Mutable-ID-Falle zu zeigen |
+| 429 / 503 | **simuliert** | Chaos-Injektion (`-ChaosRate`, Default 30 %) fälscht Drossel-Antworten — AIMD-Halbierung, Retry-After-Parken und App-Hopping werden sichtbar, ohne Graph real zu fluten |
+
+Ausgabe-Konvention: **Gelb** = was passiert ist, **Cyan** = `Resolving with: …`
+(die Gegenmaßnahme), Grün = Erfolg, Rot = permanent, Magenta = Phasen.
+Statusbars: WPF-Dashboard (InFlight-Threads, AIMD-Limit, Token-Restlaufzeit
+pro App, Counter, Live-Log) in einem eigenen STA-Runspace; parallel dazu
+`Write-Progress`-Balken in der Konsole. `-NoGui` für Server Core,
+`-SkipSeed` nutzt vorhandene Mails, `-Cleanup` räumt die Demo-Mails ab.
+
+```powershell
+.\Demo-GraphThrottling.ps1                     # WPF + Konsole, 12 Mails, Chaos 30 %
+.\Demo-GraphThrottling.ps1 -NoGui -ChaosRate 0.5
+.\Demo-GraphThrottling.ps1 -SkipSeed -Cleanup
+```
 
 ## Konfiguration (ENV)
 
