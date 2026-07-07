@@ -12,10 +12,14 @@
       - 404 (ECHT):       Claim-Race per Doppel-Move. Nebenbei die Mutable-ID-
                           Falle: ohne Prefer IdType='ImmutableId' ist die alte
                           ID nach dem Move ungueltig.
-      - 429/503 (SIMULIERT): Chaos-Injektion faelscht Drossel-Antworten, damit
-                          AIMD (Limit halbieren), Retry-After-Parken und
-                          App-Hopping sichtbar werden, ohne Microsoft echt zu
-                          bombardieren.
+      - 429/503 (ECHT):   Concurrency-Burst: -BurstSize (Default 10) parallele
+                          Requests OHNE lokalen Limiter verletzen das 4er-Limit
+                          pro App+Postfach -> Graph drosselt echt (meist 429
+                          "MailboxConcurrency", je nach Backend/Operation 503).
+      - 429/503 (SIMULIERT): Chaos-Injektion liefert zusaetzlich den anhaltenden
+                          Drossel-Strom fuer die Mover-Phase (AIMD, Retry-After-
+                          Parken, App-Hopping), ohne das Limit dauerhaft zu
+                          verletzen.
 
     Ownership-Modell wie von Rust geliehen: eine synchronisierte Hashtable
     haelt pro Mail-ID genau EINEN Owner (poller -> worker-N -> Release).
@@ -42,6 +46,11 @@
 .PARAMETER WorkerCount
     Worker-Runspaces (Default 6) - bewusst > 4, die Pro-App-Limiter sind
     die einzige Wahrheit fuer die Leitungs-Parallelitaet.
+.PARAMETER BurstSize
+    Parallele Requests fuer den ECHTEN Concurrency-Burst in Phase 4
+    (Default 10; das Backend-Limit liegt bei 4 pro App+Postfach).
+.PARAMETER NoBurst
+    Phase 4 (echter 429/503-Burst) ueberspringen.
 .PARAMETER ChaosRate
     Anteil simulierter 429/503-Antworten in der Mover-Phase (Default 0.30).
 
@@ -59,6 +68,8 @@ param(
     [switch]$Cleanup,
     [ValidateRange(1, 100)] [int]$SeedCount = 12,
     [ValidateRange(1, 16)]  [int]$WorkerCount = 6,
+    [ValidateRange(5, 20)]  [int]$BurstSize = 10,
+    [switch]$NoBurst,
     [ValidateRange(0.0, 0.9)] [double]$ChaosRate = 0.30
 )
 
@@ -299,8 +310,10 @@ function Invoke-DemoGraphRequest {
         try {
             if ($cfg.ChaosRate -gt 0 -and (Get-Random -Minimum 0.0 -Maximum 1.0) -lt $cfg.ChaosRate) {
                 # --- Chaos-Injektion: gefaelschte Drossel-Antwort, KEIN echter
-                #     Call. 429/503 lassen sich gegen Graph nicht seri0es auf
-                #     Knopfdruck provozieren - Simulation zeigt die Reaktion.
+                #     Call. Der ECHTE 429/503 kommt einmalig aus Phase 4
+                #     (Concurrency-Burst > 4). Chaos liefert den anhaltenden
+                #     Drossel-Strom fuer die Mover-Phase, ohne das Limit
+                #     dauerhaft zu verletzen.
                 $sc = if ((Get-Random -Maximum 3) -eq 0) { 429 } else { 503 }
                 if ($sc -eq 429) { $ra = [double](Get-Random -Minimum 3 -Maximum 15) }
                 $simTag = ' (simuliert)'
@@ -490,6 +503,71 @@ function Remove-DemoMails {
         }
     }
     Write-Ok "Cleanup: $n Demo-Mail(s) geloescht"
+}
+
+# ---------------------------------------------------------------------------
+#  ECHTE 429/503 provozieren: Concurrency-Burst ueber das 4er-Limit
+#  Das Outlook-Backend erlaubt 4 gleichzeitige Requests pro App+Postfach.
+#  Wir feuern $Count Requests parallel und BEWUSST am lokalen Limiter
+#  (Enter-AppSlot) vorbei - Graph drosselt dann echt: meist 429 mit
+#  "MailboxConcurrency", je nach Backend/Operation auch 503. Genau der
+#  Fall, fuer den der AdaptiveLimiter existiert. Ein einzelner, kleiner
+#  Burst - kein Fluten des 10k-Kontingents.
+# ---------------------------------------------------------------------------
+function Invoke-DemoConcurrencyBurst {
+    param([Parameter(Mandatory)] [string]$FolderId, [int]$Count = 10)
+    $app = $Sync.Apps['A']
+    $token = Get-DemoToken $app
+    try { Add-Type -AssemblyName System.Net.Http -ErrorAction Stop } catch { }   # 5.1; in PS 7 bereits geladen
+    $client = New-Object System.Net.Http.HttpClient
+    try {
+        $client.Timeout = [TimeSpan]::FromSeconds(100)
+        $client.DefaultRequestHeaders.Authorization =
+            New-Object System.Net.Http.Headers.AuthenticationHeaderValue('Bearer', $token)
+        [void]$client.DefaultRequestHeaders.TryAddWithoutValidation('Prefer', "IdType='ImmutableId'")
+        $uri = "$($Sync.Config.GraphRoot)/users/$($Sync.Config.Mailbox)/mailFolders/$FolderId/messages?`$top=25&`$orderby=receivedDateTime asc&`$select=id,subject"
+        Add-DemoLog "  feuere $Count parallele GETs mit app-a - lokaler Limiter bewusst umgangen ..." 'Gray'
+        $tasks = @(1..$Count | ForEach-Object { $client.GetAsync($uri) })
+        try { [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]$tasks) } catch { }
+        $ok = 0; $failed = 0; $throttled = @{}; $ra = $null
+        foreach ($t in $tasks) {
+            if ($t.Status -ne 'RanToCompletion') { $failed++; continue }
+            $resp = $t.Result
+            $sc = [int]$resp.StatusCode
+            if ($sc -lt 300) { $ok++ }
+            elseif ($sc -eq 429 -or $sc -eq 503 -or $sc -eq 504) {
+                $throttled[$sc] = 1 + [int]$throttled[$sc]
+                if ($sc -eq 429) { Step-DemoCounter 'E429' } else { Step-DemoCounter 'E503' }
+                if ($null -eq $ra -and $resp.Headers.RetryAfter) {
+                    try {
+                        if ($resp.Headers.RetryAfter.Delta) {
+                            $ra = [math]::Round($resp.Headers.RetryAfter.Delta.Value.TotalSeconds, 0)
+                        } elseif ($resp.Headers.RetryAfter.Date) {
+                            $ra = [math]::Round(($resp.Headers.RetryAfter.Date.Value.LocalDateTime - (Get-Date)).TotalSeconds, 0)
+                        }
+                    } catch { }
+                }
+            } else { $failed++ }
+            $resp.Dispose()
+        }
+        if ($throttled.Count -gt 0) {
+            $mix = ($throttled.GetEnumerator() | Sort-Object Name |
+                    ForEach-Object { "{0}x HTTP {1}" -f $_.Value, $_.Name }) -join ', '
+            $raText = if ($null -ne $ra) { " - Retry-After=${ra}s" } else { '' }
+            Write-Happened "Concurrency-Limit verletzt (ECHT): ${ok}/${Count} ok, ${mix}${raText}"
+            $old = Register-AppThrottle $app
+            Write-Resolving "AIMD: app-a Parallelitaet ${old} -> $($app.Limit) - genau dafuer kappt Enter-AppSlot normalerweise bei 4"
+            if ($null -ne $ra -and $ra -ge $Sync.Config.CooldownThreshold) {
+                Set-AppParked $app ([math]::Min($ra, $Sync.Config.RetryAfterCap))
+                Write-Resolving "Retry-After respektiert: app-a ${ra}s geparkt - Pool weicht auf app-b aus"
+            } elseif ($null -ne $ra) {
+                Write-Resolving "Retry-After respektiert - warte ${ra}s vor der naechsten Phase"
+                Wait-DemoSeconds $ra
+            }
+        } else {
+            Add-DemoLog "  [i] ${ok}/${Count} ok, ${failed} Fehler - Backend hat den Burst diesmal toleriert (Timing). Erneut mit hoeherem -BurstSize versuchen." 'Gray'
+        }
+    } finally { $client.Dispose() }
 }
 
 # ---------------------------------------------------------------------------
@@ -737,7 +815,16 @@ try {
     }
     Flush-DemoLog; Show-DemoBars
 
-    Write-Phase ("Phase 4 - Mover '{0}' -> '{1}' mit {2} Workern, Chaos {3:P0} (429/503 simuliert)" -f `
+    if (-not $NoBurst) {
+        Write-Phase ("Phase 4 - 429/503 provozieren (ECHT): {0} parallele Zugriffe gegen das 4er-Concurrency-Limit" -f $BurstSize)
+        Invoke-DemoConcurrencyBurst -FolderId $SourceFolderId -Count $BurstSize
+        Flush-DemoLog; Show-DemoBars
+    } else {
+        Write-Phase 'Phase 4 - Concurrency-Burst uebersprungen (-NoBurst)'
+        Flush-DemoLog
+    }
+
+    Write-Phase ("Phase 5 - Mover '{0}' -> '{1}' mit {2} Workern, Chaos {3:P0} (429/503 simuliert)" -f `
                  $SourceFolderName, $TargetFolderName, $WorkerCount, $ChaosRate)
     $Sync.Config.ChaosRate = $ChaosRate
     $jobs = [System.Collections.Generic.List[object]]::new()
@@ -776,7 +863,7 @@ try {
         Start-Sleep -Milliseconds 600
     }
 
-    Write-Phase 'Phase 5 - Chaos aus, AIMD-Erholung beobachten (+1 Slot je Erfolgsserie)'
+    Write-Phase 'Phase 6 - Chaos aus, AIMD-Erholung beobachten (+1 Slot je Erfolgsserie)'
     $Sync.Config.ChaosRate = 0.0
     for ($i = 1; $i -le 20; $i++) {
         $lane = if ($i % 2 -eq 0) { 'POLL' } else { 'WORK' }
@@ -787,13 +874,13 @@ try {
     }
 
     if ($Cleanup) {
-        Write-Phase 'Phase 6 - Cleanup: Demo-Mails aus dem Zielordner loeschen'
+        Write-Phase 'Phase 7 - Cleanup: Demo-Mails aus dem Zielordner loeschen'
         Remove-DemoMails -FolderId $TargetFolderId
     }
 
     $c = $Sync.Counters
     Write-Phase 'Zusammenfassung'
-    Add-DemoLog ("  verarbeitet: {0}/{1}   |   401={2}  404={3}  429={4}(sim)  503={5}(sim)" -f `
+    Add-DemoLog ("  verarbeitet: {0}/{1}   |   401={2}  404={3}  429={4}  503={5}  (429/503: Burst echt + Chaos simuliert)" -f `
                  $c.Processed, $c.Seeded, $c.E401, $c.E404, $c.E429, $c.E503) 'White'
     Add-DemoLog ("  App-A Limit={0}/4  |  App-B Limit={1}/4  |  offene Ownership: {2}" -f `
                  $Sync.Apps['A'].Limit, $Sync.Apps['B'].Limit, $Sync.Ownership.Count) 'White'
