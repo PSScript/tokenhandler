@@ -408,7 +408,12 @@ class InboxPoller:
         self.interval = interval
         self.executor = ThreadPoolExecutor(max_workers=workers,
                                            thread_name_prefix="mail-worker")
-        self._claimed: set[str] = set()   # Schutz gegen Poll-Ueberlappung
+        # Ownership-Tabelle im Rust-Sinn: genau EIN Owner pro Mail-ID.
+        # Claim = move (Poller uebernimmt), Release im finally des Workers.
+        # Fuer Observability als dict {id: (owner, since, state)} erweiterbar
+        # - so macht es Demo-GraphThrottling.ps1. In Variante B ist Graph
+        # selbst der Borrow-Checker: verlorenes Move-Race = 404.
+        self._claimed: set[str] = set()
         self._claimed_lock = threading.Lock()
         self._processing_folder_id: str | None = None
 
@@ -456,8 +461,14 @@ class InboxPoller:
         """Variante A: ungelesene Mails holen, Claim per In-Memory-Set,
         nach Verarbeitung PATCH isRead=true."""
         url = f"{GRAPH_ROOT}/users/{self.mailbox}/mailFolders/inbox/messages"
+        # Graph-Eigenheit bei $filter + $orderby: die $orderby-Properties
+        # muessen im $filter enthalten sein und dort VOR den uebrigen
+        # Bedingungen stehen - sonst HTTP 400 ("InefficientFilter").
+        # Der ge-1900-Dummy erfuellt genau diese Regel.
         params = {
-            "$filter": "isRead eq false",
+            "$filter": ("receivedDateTime ge 1900-01-01T00:00:00Z"
+                        " and isRead eq false"),
+            "$orderby": "receivedDateTime asc",   # FIFO: aelteste zuerst
             "$top": str(self.batch_size),
             "$select": "id,subject,receivedDateTime",
         }
@@ -479,6 +490,8 @@ class InboxPoller:
         url = f"{GRAPH_ROOT}/users/{self.mailbox}/mailFolders/inbox/messages"
         resp = self.pool.request(Lane.POLL, "GET", url,
                                  params={"$top": str(self.batch_size),
+                                         # FIFO: aelteste zuerst
+                                         "$orderby": "receivedDateTime asc",
                                          "$select": "id,subject"})
         messages = resp.json().get("value", [])
         log(f"[poller] {len(messages)} Mail(s) im Posteingang")
