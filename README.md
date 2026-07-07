@@ -161,7 +161,7 @@ pro App, Counter, Live-Log) in einem eigenen STA-Runspace; parallel dazu
 | Variable | Default | Bedeutung |
 | --- | --- | --- |
 | `TENANT_ID` | `<tenant-guid>` | Entra-ID-Tenant |
-| `MAILBOX_UPN` | `orchestra@contoso.com` | Überwachtes Postfach |
+| `MAILBOX_UPN` | `test@contoso.com` | Überwachtes Postfach |
 | `GRAPH_APP1_ID` / `GRAPH_APP1_SECRET` | Platzhalter | App-A (POLL-Lane bevorzugt, 1 reservierter Slot) |
 | `GRAPH_APP2_ID` / `GRAPH_APP2_SECRET` | Platzhalter | App-B (WORK-Lane bevorzugt) |
 | `WORKER_THREADS` | `8` | Verarbeitungs-Threads (≠ Graph-Parallelität!) |
@@ -171,7 +171,7 @@ pro App, Counter, Live-Log) in einem eigenen STA-Runspace; parallel dazu
 | `PROCESSING_FOLDER` | `Processing` | Zielordner des Movers (Variante B) |
 
 Beide App-Registrierungen benötigen `Mail.ReadWrite` (Application) — idealerweise
-per Application Access Policy auf das Orchestra-Postfach eingeschränkt.
+per Application Access Policy auf das Postfach eingeschränkt.
 
 ## Build & Run
 
