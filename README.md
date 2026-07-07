@@ -1,7 +1,7 @@
-# tokenhandler — Graph-Throttling-Scaffold für den Mail-Handler
+# tokenhandler — Graph-Throttling-Scaffold für den Orchestra-Mail-Handler
 
 Referenz-Gerüst (Java + Python, klassengleich) für die Ablösung des naiven
-Polling-/Retry-Verhaltens im E-Mail-Handler gegen Microsoft Graph.
+Polling-/Retry-Verhaltens im Orchestra-E-Mail-Handler gegen Microsoft Graph.
 Die Dateien sind **Scaffolding zum Verstehen und Übertragen**, kein
 Drop-in-Ersatz — die Fachlogik gehört in `InboxPoller.process()`.
 
@@ -129,9 +129,15 @@ sondern zu HTTP 404.
 ## Demo: `Demo-GraphThrottling.ps1` (PowerShell + WPF)
 
 Interaktive Demo gegen einen **Testtenant** — alle Variablen (Tenant, Apps,
-Postfach, Ordner) stehen oben im Skript. Der Mover verschiebt Mails von
-`$SourceFolderName` (`Eingehend`) nach `$TargetFolderName` (`Verarbeitet`),
-FIFO per `$orderby`, mit Runspace-Workern und der Ownership-Hashtable.
+Postfach, Ordner) stehen oben im Skript. Nach dem Start läuft ein
+Command-Dispatcher: Szenarien werden per **WPF-Button** oder **Konsolen-Taste**
+ausgelöst (`[S]eed [K]lonen [1]=401 [4]=404 [B]urst [P]ing-Pong [C]haos
+[X]=Cleanup [Q]=Beenden`). Der **Ping-Pong-Mover** verschiebt alle Mails
+`Eingehend ⇄ Verarbeitet` (a↔b↔a↔b), dreht bei leerer Quelle automatisch die
+Richtung und erzeugt so echte Dauerlast; **Klonen** dupliziert den Bestand per
+`/copy` (aus 25 werden 50, 100, … — Schutz-Obergrenze 200). FIFO per
+`$orderby`, Runspace-Worker, Ownership-Hashtable; Ordnerstände
+(`totalItemCount`) laufen live im Dashboard mit.
 
 Provozierte Fehler und ihre sichtbare Behandlung:
 
@@ -141,17 +147,23 @@ Provozierte Fehler und ihre sichtbare Behandlung:
 | 404 | **echt** | Doppel-Move derselben Mail (Claim-Race) — bewusst ohne `Prefer: IdType='ImmutableId'`, um die Mutable-ID-Falle zu zeigen |
 | 429 / 503 | **echt** | Concurrency-Burst: `-BurstSize` (Default 10) parallele Requests **ohne** lokalen Limiter verletzen das 4er-Limit pro App+Postfach — Graph drosselt echt (meist 429 `MailboxConcurrency`, je nach Backend/Operation 503) |
 | 429 / 503 | **simuliert** | Chaos-Injektion (`-ChaosRate`, Default 30 %) liefert den anhaltenden Drossel-Strom für die Mover-Phase — AIMD-Halbierung, Retry-After-Parken, App-Hopping — ohne das Limit dauerhaft zu verletzen |
+| Dauerlast | **echt** | Ping-Pong-Mover a↔b: verschiebt kontinuierlich alle Mails zwischen beiden Ordnern, Richtungswechsel bei leerer Quelle (`Sweep`-Zähler) — in Kombination mit Klonen und Chaos die realistischste Annäherung an die Limits |
+| Lastvervielfachung | **echt** | Klonen per `POST /messages/{id}/copy` verdoppelt den Bestand im aktuellen Quellordner pro Klick (Kontingent-Schutz bei 200 Mails) |
 
 Ausgabe-Konvention: **Gelb** = was passiert ist, **Cyan** = `Resolving with: …`
-(die Gegenmaßnahme), Grün = Erfolg, Rot = permanent, Magenta = Phasen.
-Statusbars: WPF-Dashboard (InFlight-Threads, AIMD-Limit, Token-Restlaufzeit
-pro App, Counter, Live-Log) in einem eigenen STA-Runspace; parallel dazu
-`Write-Progress`-Balken in der Konsole. `-NoGui` für Server Core,
-`-SkipSeed` nutzt vorhandene Mails, `-Cleanup` räumt die Demo-Mails ab,
-`-BurstSize`/`-NoBurst` steuern den echten Concurrency-Burst.
+(die Gegenmaßnahme), Grün = Erfolg, Rot = permanent, Magenta = Phasen und
+Richtungswechsel. Statusbars: WPF-Dashboard (Szenario-Buttons, InFlight-Threads,
+AIMD-Limit, Token-Restlaufzeit pro App, Richtung + Ordnerstände, Counter,
+Live-Log) in einem eigenen STA-Runspace — Buttons schreiben nur in eine
+Command-Queue, ausgeführt wird im Main-Dispatcher, die UI bleibt dadurch immer
+reaktiv. Parallel dazu `Write-Progress`-Balken und Tastensteuerung in der
+Konsole. `-NoGui` für Server Core, `-SkipSeed` ohne Start-Seed, `-Cleanup`
+räumt beim Beenden beide Ordner, `-AutoRun` fährt 401 → 404 → Burst
+automatisch und geht dann in den interaktiven Modus über.
 
 ```powershell
-.\Demo-GraphThrottling.ps1                     # WPF + Konsole, 12 Mails, Chaos 30 %
+.\Demo-GraphThrottling.ps1                     # interaktiv: WPF-Buttons + Tasten
+.\Demo-GraphThrottling.ps1 -AutoRun            # 401/404/Burst automatisch, dann interaktiv
 .\Demo-GraphThrottling.ps1 -NoGui -ChaosRate 0.5
 .\Demo-GraphThrottling.ps1 -SkipSeed -Cleanup
 ```
@@ -161,7 +173,7 @@ pro App, Counter, Live-Log) in einem eigenen STA-Runspace; parallel dazu
 | Variable | Default | Bedeutung |
 | --- | --- | --- |
 | `TENANT_ID` | `<tenant-guid>` | Entra-ID-Tenant |
-| `MAILBOX_UPN` | `test@contoso.com` | Überwachtes Postfach |
+| `MAILBOX_UPN` | `orchestra@contoso.com` | Überwachtes Postfach |
 | `GRAPH_APP1_ID` / `GRAPH_APP1_SECRET` | Platzhalter | App-A (POLL-Lane bevorzugt, 1 reservierter Slot) |
 | `GRAPH_APP2_ID` / `GRAPH_APP2_SECRET` | Platzhalter | App-B (WORK-Lane bevorzugt) |
 | `WORKER_THREADS` | `8` | Verarbeitungs-Threads (≠ Graph-Parallelität!) |
@@ -171,7 +183,7 @@ pro App, Counter, Live-Log) in einem eigenen STA-Runspace; parallel dazu
 | `PROCESSING_FOLDER` | `Processing` | Zielordner des Movers (Variante B) |
 
 Beide App-Registrierungen benötigen `Mail.ReadWrite` (Application) — idealerweise
-per Application Access Policy auf das Postfach eingeschränkt.
+per Application Access Policy auf das Orchestra-Postfach eingeschränkt.
 
 ## Build & Run
 
