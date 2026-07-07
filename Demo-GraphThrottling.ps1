@@ -56,6 +56,10 @@
     benoetigen Mail.ReadWrite (Application), idealerweise per Application
     Access Policy auf das Testpostfach eingeschraenkt.
     Windows PowerShell 5.1 oder PowerShell 7 (Windows; WPF ist Windows-only).
+    Startwege: als Datei (.\Demo-GraphThrottling.ps1), per Konsolen-Paste
+    oder Run Selection (F8) - bei Paste/F8 werden Parameter-Defaults
+    automatisch gesetzt und eine evtl. noch offene Instanz derselben
+    Session vorher aufgeraeumt.
 
     Tasten (Konsole, auch parallel zum WPF-Fenster):
       [S]eed  [K]lonen  [1]=401  [4]=404-Race  [B]urst
@@ -75,15 +79,38 @@ param(
 )
 
 # ---------------------------------------------------------------------------
-#  Schutz: als Datei starten, nicht in die Konsole pasten. Beim Paste bzw.
-#  "Run Selection" laeuft param() nicht -> alle Parameter waeren $null.
+#  Run Selection (F8) / Paste-Support: dort laeuft param() nicht als Skript-
+#  Parameterblock, bzw. die Defaults gehen bei Zeile-fuer-Zeile-Paste nach dem
+#  param-Statement wieder verloren. Deshalb werden alle Parameter hier robust
+#  normalisiert - der Datei-Start bleibt davon unberuehrt.
 # ---------------------------------------------------------------------------
 if (-not $PSCommandPath) {
-    Write-Host '[!] Skript laeuft nicht als Datei (param() inaktiv) - setze Default-Parameter. Besser: .\Demo-GraphThrottling.ps1 starten.' -ForegroundColor Yellow
-    if (-not $SeedCount)   { $SeedCount   = 12 }
-    if (-not $WorkerCount) { $WorkerCount = 6 }
-    if (-not $BurstSize)   { $BurstSize   = 10 }
-    if (-not $ChaosRate)   { $ChaosRate   = 0.30 }
+    Write-Host '[i] Run Selection / Paste erkannt - Parameter werden auf Defaults normalisiert.' -ForegroundColor DarkCyan
+    if ($null -eq $SeedCount   -or $SeedCount   -lt 1)                        { $SeedCount   = 12 }
+    if ($null -eq $WorkerCount -or $WorkerCount -lt 1)                        { $WorkerCount = 6 }
+    if ($null -eq $BurstSize   -or $BurstSize   -lt 5)                        { $BurstSize   = 10 }
+    if ($null -eq $ChaosRate   -or $ChaosRate   -le 0 -or $ChaosRate -gt 0.9) { $ChaosRate   = 0.30 }
+    foreach ($sw in 'NoGui', 'SkipSeed', 'Cleanup', 'AutoRun') {
+        if ($null -eq (Get-Variable -Name $sw -ValueOnly -ErrorAction SilentlyContinue)) {
+            Set-Variable -Name $sw -Value $false
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+#  Session-Hygiene fuer wiederholtes F8: Reste eines frueheren Laufs in
+#  DERSELBEN Session (Zombie-Fenster, offener RunspacePool) sauber abbauen,
+#  bevor die neue Instanz startet.
+# ---------------------------------------------------------------------------
+if ($Global:DemoGraphThrottling) {
+    $prev = $Global:DemoGraphThrottling
+    try { if ($prev.Sync) { $prev.Sync.Running = $false; $prev.Sync.CloseUi = $true } } catch { }
+    Start-Sleep -Milliseconds 300
+    try { if ($prev.UiPs)       { $prev.UiPs.Dispose() } }                                  catch { }
+    try { if ($prev.UiRunspace) { $prev.UiRunspace.Close(); $prev.UiRunspace.Dispose() } }  catch { }
+    try { if ($prev.Pool)       { $prev.Pool.Close(); $prev.Pool.Dispose() } }              catch { }
+    $Global:DemoGraphThrottling = $null
+    Write-Host '[i] Vorherige Demo-Instanz dieser Session aufgeraeumt.' -ForegroundColor DarkCyan
 }
 
 # =============================================================================
@@ -917,6 +944,9 @@ $Iss.Variables.Add([System.Management.Automation.Runspaces.SessionStateVariableE
 $Pool = [runspacefactory]::CreateRunspacePool(1, $WorkerCount, $Iss, $Host)
 $Pool.Open()
 
+# Handle fuer die Session-Hygiene beim naechsten F8-Lauf (siehe Skriptkopf)
+$Global:DemoGraphThrottling = @{ Sync = $Sync; UiPs = $UiPs; UiRunspace = $UiRunspace; Pool = $Pool }
+
 # Worker: Ownership-Transfer -> Move -> "Fachlogik" -> Release (Rust: drop)
 $WorkerScript = {
     param([string]$Id, [string]$Subject, [string]$TargetFolderId)
@@ -1076,7 +1106,14 @@ try {
                     'Q' { $Sync.Commands.Enqueue('quit') }
                 }
             }
-        } catch { }   # Host ohne interaktive Konsole (z. B. ISE) - Tasten aus
+        } catch {
+            # Host ohne interaktive Konsole (z. B. ISE bei F8): Tasten aus,
+            # einmalig sichtbar machen - die Buttons uebernehmen.
+            if (-not $script:KeysUnavailableNoted) {
+                $script:KeysUnavailableNoted = $true
+                Add-DemoLog '  [i] Tastensteuerung in diesem Host nicht verfuegbar - Szenarien ueber die WPF-Buttons ausloesen' 'Gray'
+            }
+        }
 
         Flush-DemoLog; Show-DemoBars
         if (((Get-Date) - $lastCountRefresh).TotalSeconds -ge 5) {
@@ -1141,4 +1178,5 @@ finally {
         $UiPs.Dispose(); $UiRunspace.Close(); $UiRunspace.Dispose()
     }
     $Pool.Close(); $Pool.Dispose()
+    $Global:DemoGraphThrottling = $null
 }
