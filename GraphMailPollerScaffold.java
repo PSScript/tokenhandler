@@ -501,7 +501,12 @@ public final class GraphMailPollerScaffold {
         private final int batchSize;
         private final double intervalSeconds;
         private final ExecutorService workers;
-        private final Set<String> claimed = ConcurrentHashMap.newKeySet(); // Schutz gegen Poll-Ueberlappung
+        // Ownership-Tabelle im Rust-Sinn: genau EIN Owner pro Mail-ID.
+        // Claim = move (Poller uebernimmt), Release im finally des Workers.
+        // Fuer Observability als Map<Id, Owner/Since/State> erweiterbar -
+        // so macht es Demo-GraphThrottling.ps1. In Variante B ist Graph
+        // selbst der Borrow-Checker: verlorenes Move-Race = 404.
+        private final Set<String> claimed = ConcurrentHashMap.newKeySet();
         private String processingFolderIdCache;   // nur vom Poller-Thread genutzt
 
         InboxPoller(GraphAppPool pool, String mailbox, ClaimMode claimMode,
@@ -549,8 +554,13 @@ public final class GraphMailPollerScaffold {
         /** Variante A: ungelesene Mails holen, Claim per In-Memory-Set,
          *  nach Verarbeitung PATCH isRead=true. */
         private void pollIsRead() throws IOException, InterruptedException {
+            // Graph-Eigenheit bei $filter + $orderby: die $orderby-Properties
+            // muessen im $filter enthalten sein und dort VOR den uebrigen
+            // Bedingungen stehen - sonst HTTP 400 ("InefficientFilter").
+            // Der ge-1900-Dummy erfuellt genau diese Regel.
             String url = GRAPH_ROOT + "/users/" + mailbox + "/mailFolders/inbox/messages"
-                    + "?$filter=isRead%20eq%20false"   // %20: URI.create verweigert rohe Leerzeichen
+                    + "?$filter=" + enc("receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq false")
+                    + "&$orderby=" + enc("receivedDateTime asc")   // FIFO: aelteste zuerst
                     + "&$top=" + batchSize
                     + "&$select=id,subject,receivedDateTime";
             HttpResponse<String> resp = pool.request(Lane.POLL, "GET", url, null);
@@ -575,7 +585,9 @@ public final class GraphMailPollerScaffold {
         private void pollMove() throws IOException, InterruptedException {
             String folderId = processingFolderId();
             String url = GRAPH_ROOT + "/users/" + mailbox + "/mailFolders/inbox/messages"
-                    + "?$top=" + batchSize + "&$select=id,subject";
+                    + "?$top=" + batchSize
+                    + "&$orderby=" + enc("receivedDateTime asc")   // FIFO: aelteste zuerst
+                    + "&$select=id,subject";
             HttpResponse<String> resp = pool.request(Lane.POLL, "GET", url, null);
             JsonNode messages = JSON.readTree(resp.body()).path("value");
             log("[poller] %d Mail(s) im Posteingang", messages.size());
