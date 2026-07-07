@@ -1,7 +1,7 @@
 # tokenhandler — Graph-Throttling-Scaffold für den Orchestra-Mail-Handler
 
 Referenz-Gerüst (Java + Python, klassengleich) für die Ablösung des naiven
-Polling-/Retry-Verhaltens im Orchestra-E-Mail-Handler gegen Microsoft Graph.
+Polling-/Retry-Verhaltens im E-Mail-Handler gegen Microsoft Graph.
 Die Dateien sind **Scaffolding zum Verstehen und Übertragen**, kein
 Drop-in-Ersatz — die Fachlogik gehört in `InboxPoller.process()`.
 
