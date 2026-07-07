@@ -74,6 +74,18 @@ param(
     [switch]$AutoRun
 )
 
+# ---------------------------------------------------------------------------
+#  Schutz: als Datei starten, nicht in die Konsole pasten. Beim Paste bzw.
+#  "Run Selection" laeuft param() nicht -> alle Parameter waeren $null.
+# ---------------------------------------------------------------------------
+if (-not $PSCommandPath) {
+    Write-Host '[!] Skript laeuft nicht als Datei (param() inaktiv) - setze Default-Parameter. Besser: .\Demo-GraphThrottling.ps1 starten.' -ForegroundColor Yellow
+    if (-not $SeedCount)   { $SeedCount   = 12 }
+    if (-not $WorkerCount) { $WorkerCount = 6 }
+    if (-not $BurstSize)   { $BurstSize   = 10 }
+    if (-not $ChaosRate)   { $ChaosRate   = 0.30 }
+}
+
 # =============================================================================
 #  VARIABLEN - TESTTENANT (hier anpassen)                <<< NUR TESTTENANT >>>
 # =============================================================================
@@ -118,6 +130,7 @@ $Sync.FolderCounts = [hashtable]::Synchronized(@{ A = 0; B = 0 })
 $Sync.Direction    = 'AB'      # AB: A->B, BA: B->A (Ping-Pong dreht das um)
 $Sync.PingPong     = $false
 $Sync.Running      = $true
+$Sync.Fatal        = $false
 $Sync.CloseUi      = $false
 $Sync.Phase        = 'Initialisierung'
 
@@ -394,9 +407,16 @@ function Invoke-DemoGraphRequest {
             }
             default {
                 # Uebrige 4xx = permanent. 404 wertet der Aufrufer als
-                # verlorenes Claim-Race aus (Variante B).
+                # verlorenes Claim-Race aus (Variante B) und bleibt hier still.
+                $short = if ($detail.Length -gt 300) { $detail.Substring(0, 300) + ' ...' } else { $detail }
+                if ($sc -ne 404) {
+                    Write-Happened "[$($App.Name)] HTTP ${sc} permanent - $short"
+                    if ($sc -eq 403) {
+                        Write-Resolving "Berechtigung pruefen: Mail.ReadWrite (Application) mit Admin Consent; greift eine Application Access Policy, muss das Testpostfach in der Policy-Gruppe sein"
+                    }
+                }
                 $ex = New-Object System.InvalidOperationException(
-                    ("permanenter HTTP {0}: {1}" -f $sc, $detail))
+                    ("permanenter HTTP {0}: {1}" -f $sc, $short))
                 $ex.Data['Status'] = $sc
                 throw $ex
             }
@@ -870,7 +890,7 @@ if ($UseGui) {
             if ($ctl['LogList'].Items.Count -gt 0) {
                 $ctl['LogList'].ScrollIntoView($ctl['LogList'].Items[$ctl['LogList'].Items.Count - 1])
             }
-            if (-not $Sync.Running) { $ctl['PhaseText'].Text = 'Demo beendet - Fenster kann geschlossen werden' }
+            if (-not $Sync.Running -and -not $Sync.Fatal) { $ctl['PhaseText'].Text = 'Demo beendet - Fenster kann geschlossen werden' }
             if ($Sync.CloseUi) { $window.Close() }
         })
         $window.Add_ContentRendered({ $timer.Start() })
@@ -931,8 +951,12 @@ $jobs = [System.Collections.Generic.List[object]]::new()
 try {
     Write-Phase 'Start - Ordner aufloesen, Tokens holen'
     Flush-DemoLog
+    Add-DemoLog "  pruefe/erzeuge Ordner '$SourceFolderName' ..." 'Gray'
     $Sync.FolderIds['A'] = Get-DemoFolderId $SourceFolderName
+    Flush-DemoLog
+    Add-DemoLog "  pruefe/erzeuge Ordner '$TargetFolderName' ..." 'Gray'
     $Sync.FolderIds['B'] = Get-DemoFolderId $TargetFolderName
+    Flush-DemoLog
     foreach ($key in 'A', 'B') { [void](Get-DemoToken $Sync.Apps[$key]) }   # Token-Bars fuellen
     Update-DemoFolderCounts
     Flush-DemoLog; Show-DemoBars
@@ -1089,6 +1113,19 @@ try {
                  $SourceFolderName, $Sync.FolderCounts['A'], $TargetFolderName, $Sync.FolderCounts['B'], `
                  $Sync.Apps['A'].Limit, $Sync.Apps['B'].Limit) 'White'
     Flush-DemoLog
+}
+catch {
+    # Zentraler Abbruch-Handler: der Grund muss VOR dem Enter-Prompt auf dem
+    # Schirm stehen - vorher verschluckte das finally/Read-Host die Meldung.
+    $Sync.Fatal = $true
+    $Sync.Phase = 'ABBRUCH - siehe Log'
+    Add-DemoLog ('=' * 72) 'Red'
+    Add-DemoLog "  ABBRUCH: $($_.Exception.Message)" 'Red'
+    if ($_.ScriptStackTrace) {
+        Add-DemoLog ('  bei: ' + (($_.ScriptStackTrace -split "`n")[0]).Trim()) 'DarkGray'
+    }
+    Add-DemoLog '  Checkliste: TenantId/Secrets korrekt? Mailbox-UPN existiert? Mail.ReadWrite (Application) mit Admin Consent erteilt? Application Access Policy schliesst das Testpostfach ein?' 'White'
+    Add-DemoLog ('=' * 72) 'Red'
 }
 finally {
     $Sync.Running = $false
