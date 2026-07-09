@@ -639,7 +639,7 @@ public final class GraphMailPollerScaffold {
             }
         }
 
-        /** Hier gehoert die Mailflow-Fachlogik hin. Zwei Graph-Calls als
+        /** Hier gehoert die Fachlogik hin. Zwei Graph-Calls als
          *  Demo-Last (Volltext holen, dann als gelesen markieren). */
         private void process(String id, String subject) throws Exception {
             String base = GRAPH_ROOT + "/users/" + mailbox + "/messages/" + id;
@@ -648,7 +648,7 @@ public final class GraphMailPollerScaffold {
                             base + "?$select=subject,from,body", null).body());
             String sender = full.path("from").path("emailAddress")
                     .path("address").asText("?");
-            // ... parsen, in Mailflow routen, Ticket erzeugen, etc. ...
+            // ... parsen, weiterrouten, Ticket erzeugen, etc. ...
             // Variante B: statt PATCH alternativ weiter nach 'Done' verschieben
             // oder loeschen - hier bewusst identisch zu Variante A gehalten.
             pool.request(Lane.WORK, "PATCH", base,
@@ -675,7 +675,7 @@ public final class GraphMailPollerScaffold {
     // ---------------------------------------------------------------------------
     public static void main(String[] args) {
         String tenant  = env("TENANT_ID", "<tenant-guid>");
-        String mailbox = env("MAILBOX_UPN", "mailflow@contoso.com");
+        String mailbox = env("MAILBOX_UPN", "poller@contoso.com");
         ClaimMode claimMode = "move".equalsIgnoreCase(env("CLAIM_MODE", "isread").trim())
                 ? ClaimMode.MOVE : ClaimMode.ISREAD;
 

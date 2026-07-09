@@ -117,7 +117,7 @@ if ($Global:DemoGraphThrottling) {
 #  VARIABLEN - TESTTENANT (hier anpassen)                <<< NUR TESTTENANT >>>
 # =============================================================================
 $TenantId         = '00000000-0000-0000-0000-000000000000'
-$Mailbox          = 'mailflow@testtenant.onmicrosoft.com'
+$Mailbox          = 'poller@testtenant.onmicrosoft.com'
 $App1Id           = '<app1-client-id>'      # App-A: POLL-Lane, 1 reservierter Slot
 $App1Secret       = '<app1-secret>'
 $App2Id           = '<app2-client-id>'      # App-B: WORK-Lane
@@ -755,7 +755,7 @@ function Show-DemoMenu {
 $Xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="tokenhandler - Mailflow Graph-Throttling-Demo"
+        Title="tokenhandler - Graph-Throttling-Demo"
         Height="720" Width="960" WindowStartupLocation="CenterScreen"
         Background="#FF1B1B1B" Foreground="#FFEAEAEA" FontFamily="Segoe UI">
   <Window.Resources>

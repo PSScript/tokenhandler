@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Mailflow Mail-Handler - Graph-Throttling-Scaffold (Python-Referenz)
+Graph Mail-Handler - Graph-Throttling-Scaffold (Python-Referenz)
 ====================================================================
 
-Referenz-Geruest fuer die vier Korrekturen im Mailflow E-Mail-Handler:
+Referenz-Geruest fuer die vier Korrekturen im Graph-E-Mail-Handler:
 
   1. 401  -> gecachtes Token invalidieren, Refresh erzwingen, Retry mit
              EXPONENTIELLEM BACKOFF + Full Jitter (heute: enge Retry-
@@ -538,7 +538,7 @@ class InboxPoller:
             log(f"[worker] Fehler bei '{subject}': {err}")
 
     def process(self, message_id: str, subject: str) -> None:
-        """Hier gehoert die Mailflow-Fachlogik hin. Zwei Graph-Calls als
+        """Hier gehoert die Fachlogik hin. Zwei Graph-Calls als
         Demo-Last (Volltext holen, dann als gelesen markieren)."""
         base = f"{GRAPH_ROOT}/users/{self.mailbox}/messages/{message_id}"
         full = self.pool.request(Lane.WORK, "GET", base,
@@ -547,7 +547,7 @@ class InboxPoller:
         sender = (payload.get("from", {})
                   .get("emailAddress", {})
                   .get("address", "?"))
-        # ... parsen, in Mailflow routen, Ticket erzeugen, etc. ...
+        # ... parsen, weiterrouten, Ticket erzeugen, etc. ...
         # Variante B: statt PATCH alternativ weiter nach 'Done' verschieben
         # oder loeschen - hier bewusst identisch zu Variante A gehalten.
         self.pool.request(Lane.WORK, "PATCH", base, json_body={"isRead": True})
@@ -567,7 +567,7 @@ class InboxPoller:
 
 def main() -> None:
     tenant = os.environ.get("TENANT_ID", "<tenant-guid>")
-    mailbox = os.environ.get("MAILBOX_UPN", "mailflow@contoso.com")
+    mailbox = os.environ.get("MAILBOX_UPN", "poller@contoso.com")
     claim_mode = ClaimMode(os.environ.get("CLAIM_MODE", "isread").strip().lower())
 
     apps = [
