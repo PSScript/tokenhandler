@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Interaktive Mailflow Graph-Throttling-Demo: Szenarien per Button (WPF)
+    Interaktive Graph-Throttling-Demo: Szenarien per Button (WPF)
     oder Taste (Konsole) gegen einen TESTTENANT ausloesen.
 
 .DESCRIPTION
@@ -607,7 +607,7 @@ function Remove-DemoMails {
     $n = 0
     do {
         $r = Invoke-DemoGraphRequest -Method GET -Lane WORK -Uri $uri
-        $hits = @($r.value | Where-Object { $_.subject -like 'Mailflow-Demo*' -or $_.subject -like 'Race-Kandidat*' })
+        $hits = @($r.value | Where-Object { $_.subject -like '*Test*' -or $_.subject -like 'Race-Kandidat*' })
         foreach ($m in $hits) {
             [void](Invoke-DemoGraphRequest -Method DELETE -Lane WORK `
                      -Uri "$($Sync.Config.GraphRoot)/users/$($Sync.Config.Mailbox)/messages/$($m.id)")
