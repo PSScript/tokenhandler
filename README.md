@@ -1,7 +1,7 @@
-# tokenhandler — Graph-Throttling-Scaffold für den Mailflow-Mail-Handler
+# tokenhandler — Graph-Throttling-Scaffold für den Mail-Handler
 
 Referenz-Gerüst (Java + Python, klassengleich) für die Ablösung des naiven
-Polling-/Retry-Verhaltens im Mailflow-E-Mail-Handler gegen Microsoft Graph.
+Polling-/Retry-Verhaltens im E-Mail-Handler gegen Microsoft Graph.
 Die Dateien sind **Scaffolding zum Verstehen und Übertragen**, kein
 Drop-in-Ersatz — die Fachlogik gehört in `InboxPoller.process()`.
 
@@ -173,7 +173,7 @@ automatisch und geht dann in den interaktiven Modus über.
 | Variable | Default | Bedeutung |
 | --- | --- | --- |
 | `TENANT_ID` | `<tenant-guid>` | Entra-ID-Tenant |
-| `MAILBOX_UPN` | `mailflow@contoso.com` | Überwachtes Postfach |
+| `MAILBOX_UPN` | `test@contoso.com` | Überwachtes Postfach |
 | `GRAPH_APP1_ID` / `GRAPH_APP1_SECRET` | Platzhalter | App-A (POLL-Lane bevorzugt, 1 reservierter Slot) |
 | `GRAPH_APP2_ID` / `GRAPH_APP2_SECRET` | Platzhalter | App-B (WORK-Lane bevorzugt) |
 | `WORKER_THREADS` | `8` | Verarbeitungs-Threads (≠ Graph-Parallelität!) |
@@ -183,7 +183,7 @@ automatisch und geht dann in den interaktiven Modus über.
 | `PROCESSING_FOLDER` | `Processing` | Zielordner des Movers (Variante B) |
 
 Beide App-Registrierungen benötigen `Mail.ReadWrite` (Application) — idealerweise
-per Application Access Policy auf das Mailflow-Postfach eingeschränkt.
+per Application Access Policy auf das Postfach eingeschränkt.
 
 ## Build & Run
 
