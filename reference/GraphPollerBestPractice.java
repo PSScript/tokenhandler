@@ -23,7 +23,7 @@ public final class GraphPollerBestPractice {
         // Der Graph-Client bringt einen Retry-Handler mit, der 429/503 samt Retry-After ab Werk beachtet.
         //   >>> fängt ab: Retry-After nicht abschließend (kein Über-Warten/Hämmern); transientes 429/503
         // Ein EIGENER Client je App -> eigener Connection-Pool, keine geteilte "static HttpClient".
-        //   >>> fängt ab: fehlende Transport-Isolation (die zwei Lanes teilen sich kein Rohr)
+        //   >>> fängt ab: fehlende Transport-Isolation (die zwei Lanes teilen sich keine Pipe)
         this.graph = new GraphServiceClient(cred, "https://graph.microsoft.com/.default");
 
         // Write-Durchsatz auf die GEMESSENE Kapazität begrenzen (1 Slot bleibt implizit fürs Pollen).
