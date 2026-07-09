@@ -1,8 +1,8 @@
 /*
- * Mailflow Mail-Handler - Graph-Throttling-Scaffold (Java-Referenz)
+ * Mail-Handler - Graph-Throttling-Scaffold (Java-Referenz)
  * ===================================================================
  *
- * Referenz-Geruest fuer die vier Korrekturen im Mailflow E-Mail-Handler:
+ * Referenz-Geruest fuer die vier Korrekturen im E-Mail-Handler:
  *
  *   1. 401  -> gecachtes Token invalidieren, Refresh erzwingen, Retry mit
  *              EXPONENTIELLEM BACKOFF + Full Jitter (heute: enge Retry-
